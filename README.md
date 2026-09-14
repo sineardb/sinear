@@ -1,7 +1,5 @@
 # Sinear
 
-<https://github.com/sinear-io/sinear>
-
 **Sinear** is a text-based database management system with an *append-only* mode (no physical edit/delete operations on data) built with the **Nim** programming language. This project simulates the basic functionality of an RDBMS in-memory, with a logging mechanism that keeps all table structures and data persistent — automatically recoverable (*log replay*) every time the application is restarted.
 
 Interaction happens through a command-line interface, a JSON HTTP API, or a web client (SPA), using simple declarative command syntax (`create`, `insert`, `select`, `where`, `limit`, `gather`, `sum`, etc.). *Update* and *delete* operations are simulated by combining tables, aliases, and `strip` relations.
@@ -51,7 +49,7 @@ Interaction happens through a command-line interface, a JSON HTTP API, or a web 
 
 ### 8. Object Management & Schema Inspection
 - **`OBJECT`** — displays all active tables, aliases, and `LOOKUP` rules.
-- **`INFO <object_name>`** — displays the original definition/command (*raw query*) of a table or alias.
+- **`OBJECT <object_name>`** — displays the original definition/command (*raw query*) of a table or alias.
 
 ### 9. Data Persistence & Automatic Recovery (Log-Based)
 - Every command that changes structure/data (`create`, `insert`, `alias`, `lookup`, `undo`) is automatically logged to `db.log`.
@@ -79,8 +77,7 @@ Sinear can now run not just as a CLI, but also as an HTTP service:
 | `ALIAS <name> mapping ... select ...` | Creates an alias, including computed columns |
 | `LOOKUP <target>:field <source>:field [NODUP]` | Registers a reference-validation rule before insert |
 | `UNDO <object>` | Deletes a table/alias/lookup with safety validation |
-| `OBJECT` | Displays the list of all tables, aliases, and lookups |
-| `INFO <name>` | Displays the original definition of an object |
+| `OBJECT [<object name]` | Displays the list of all tables, aliases, and lookups, or displays the original definition of an object |
 | `EXIT` | Exits the program (CLI) |
 | `--server [--port=8080]` | Runs as an HTTP server with a JSON API |
 | `--crud [--port=8081]` | Runs the CRUD interface (SPA) on a separate port |
