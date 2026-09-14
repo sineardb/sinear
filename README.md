@@ -24,7 +24,7 @@ Interaction happens through a command-line interface, a JSON HTTP API, or a web 
   - `%` (*like*, matches anywhere in the string), `!%` (matches at the start), `%!` (matches at the end).
 - **`ASORT` / `DSORT`** — ascending/descending sorting by column. Works consistently on both plain tables and aliases, including when combined with `WHERE` on the same line.
 - **`LIMIT`** — limits the number of result rows.
-- **`GATHER` & `SUM(...)`** — data grouping with automatic sum/count aggregation.
+- **`GATHER` & `SUM`** — data grouping with automatic sum/count aggregation.
 - **Nested arithmetic expressions on aliases** — computed columns with `+ - * /` operators and unlimited nested parentheses. Supports operands that are either column names or literal numbers.
 - **Chaining SELECT with `&`** — multiple `SELECT` commands can be combined on one line separated by `&`, each executed in sequence producing separate tables. If a `SELECT` within the chain uses `WHERE field=value`, that `field` column is automatically hidden from the result table.
 
@@ -73,11 +73,11 @@ Sinear can now run not just as a CLI, but also as an HTTP service:
 |---|---|
 | `CREATE <table> column:type ...` | Creates a new table |
 | `INSERT <table> [id] val ...` | Adds a new row of data |
-| `SELECT <table/alias> [WHERE ...] [ASORT/DSORT ...] [LIMIT ...] [GATHER ... SUM(...)] [& SELECT ...]` | Displays/retrieves data |
+| `SELECT <table/alias> [WHERE ...] [ASORT/DSORT ...] [LIMIT ...] [GATHER ... SUM ...] [& SELECT ...]` | Displays/retrieves data |
 | `ALIAS <name> mapping ... select ...` | Creates an alias, including computed columns |
 | `LOOKUP <target>:field <source>:field [NODUP]` | Registers a reference-validation rule before insert |
 | `UNDO <object>` | Deletes a table/alias/lookup with safety validation |
-| `OBJECT [<object name]` | Displays the list of all tables, aliases, and lookups, or displays the original definition of an object |
+| `OBJECT [<object name>]` | Displays the list of all tables, aliases, and lookups, or displays the original definition of an object |
 | `EXIT` | Exits the program (CLI) |
 | `--server [--port=8080]` | Runs as an HTTP server with a JSON API |
 | `--crud [--port=8081]` | Runs the CRUD interface (SPA) on a separate port |
