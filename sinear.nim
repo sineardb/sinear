@@ -1,4 +1,4 @@
-import strutils, os, times, algorithm, math, asynchttpserver, asyncdispatch, json
+import strutils, os, times, algorithm, math, asynchttpserver, asyncdispatch, json, std/exitprocs
 when not defined(windows):
   import posix
 
@@ -29,7 +29,7 @@ type
     values: seq[string]
 
   StatementType = enum
-    stCreate, stInsert, stSelect, stSelectJoin, stSelectStrip, stAlias, stObject, stInfo, stLookup, stUndo
+    stCreate, stInsert, stSelect, stSelectJoin, stSelectStrip, stAlias, stObject, stLookup, stUndo
 
   UndoObjectKind = enum
     uokTable, uokAlias, uokLookup
@@ -78,7 +78,7 @@ type
     sumCol: string
     isAutoId: bool
     aliasName: string
-    infoTarget: string
+    objectTarget: string
     columnAliases: seq[tuple[orig: string, alias: string]]
     computedCols: seq[ComputedColumn]
     hideWhereColumn: bool
@@ -176,7 +176,7 @@ proc acquireLock(): bool =
   except:
     return false
 
-  addQuitProc(proc() {.noconv.} = releaseLock())
+  addExitProc(releaseLock)
   setControlCHook(proc() {.noconv.} =
     releaseLock()
     quit(0)
@@ -1708,13 +1708,6 @@ proc prepareAlias(parts: seq[string], statement: var Statement, db: Database): P
   statement.subStatement[] = subStmt
   return prSuccess
 
-proc prepareInfo(parts: seq[string], statement: var Statement): PrepareResult =
-  if parts.len != 2:
-    return prSyntaxError
-  statement.kind = stInfo
-  statement.infoTarget = parts[1]
-  return prSuccess
-
 proc prepareStatement(line: string, statement: var Statement, db: Database): PrepareResult =
   let fullParts = tokenize(line)
   if fullParts.len == 0:
@@ -1730,12 +1723,12 @@ proc prepareStatement(line: string, statement: var Statement, db: Database): Pre
   elif cmd == "alias":
     return prepareAlias(fullParts, statement, db)
   elif cmd == "object":
-    if fullParts.len != 1:
+    if fullParts.len != 1 and fullParts.len != 2:
       return prSyntaxError
     statement.kind = stObject
+    if fullParts.len == 2:
+      statement.objectTarget = fullParts[1]
     return prSuccess
-  elif cmd == "info":
-    return prepareInfo(fullParts, statement)
   elif cmd == "lookup":
     return prepareLookup(fullParts, statement, db)
   elif cmd == "undo":
@@ -1809,20 +1802,41 @@ proc executeUndo(statement: Statement, db: var Database): ExecuteResult =
     db.lookups = newLookups
   return erSuccess
 
-proc executeObject(db: Database) =
+proc executeObject(statement: Statement, db: Database) =
+  if statement.objectTarget.len > 0:
+    let target = statement.objectTarget
+    let tIdx = findTableIndex(db, target)
+    if tIdx != -1:
+      outp "Type: Table"
+      outp "Definition: ", db.tables[tIdx].rawCreateLine
+      return
+
+    for v in db.views:
+      if v.name.toLowerAscii() == target.toLowerAscii():
+        outp "Type: Alias"
+        outp "Definition: ", v.rawQuery
+        return
+
+    outp "Error: Object '", target, "' not found."
+    return
+
   outp "--- TABLES ---"
   if db.tables.len == 0:
     outp "(No tables)"
   else:
+    var names: seq[string] = @[]
     for t in db.tables:
-      outp " - ", t.schema.name
+      names.add(t.schema.name)
+    outp names.join("  ")
 
   outp "--- ALIASES ---"
   if db.views.len == 0:
     outp "(No aliases)"
   else:
+    var names: seq[string] = @[]
     for v in db.views:
-      outp " - ", v.name
+      names.add(v.name)
+    outp names.join("  ")
 
   outp "--- LOOKUPS ---"
   if db.lookups.len == 0:
@@ -1833,22 +1847,6 @@ proc executeObject(db: Database) =
       if lk.noDup:
         line.add(" NODUP")
       outp line
-
-proc executeInfo(statement: Statement, db: Database) =
-  let target = statement.infoTarget
-  let tIdx = findTableIndex(db, target)
-  if tIdx != -1:
-    outp "Type: Table"
-    outp "Definition: ", db.tables[tIdx].rawCreateLine
-    return
-
-  for v in db.views:
-    if v.name.toLowerAscii() == target.toLowerAscii():
-      outp "Type: Alias"
-      outp "Definition: ", v.rawQuery
-      return
-
-  outp "Error: Object '", target, "' not found."
 
 proc executeStatement(statement: Statement, db: var Database, rawLine: string = ""): ExecuteResult =
   case statement.kind
@@ -1869,10 +1867,7 @@ proc executeStatement(statement: Statement, db: var Database, rawLine: string = 
   of stUndo:
     return executeUndo(statement, db)
   of stObject:
-    executeObject(db)
-    return erSuccess
-  of stInfo:
-    executeInfo(statement, db)
+    executeObject(statement, db)
     return erSuccess
 
 proc logCommand(line: string) =
@@ -1960,7 +1955,7 @@ proc runOneCommand(line: string, db: var Database, isChained: bool) =
       if not isChained:
         if statement.kind == stInsert and statement.isAutoId:
           outp "Executed. ID = ", statement.rowToInsert.id
-        elif statement.kind notin {stObject, stInfo, stSelect, stSelectJoin, stSelectStrip}:
+        elif statement.kind notin {stObject, stSelect, stSelectJoin, stSelectStrip}:
           outp "Executed."
   of prSyntaxError:
     outp "Syntax error in statement."
