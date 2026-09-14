@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>sinear CRUD</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --panel: #ffffff;
+    --border: #e2e6ec;
+    --text: #1f2530;
+    --muted: #7a8394;
+    --accent: #4f8cff;
+    --accent-dark: #3a6fd6;
+    --danger: #e5484d;
+    --ok: #2fae66;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    height: 100vh;
+    display: flex;
+  }
+  #sidebar {
+    width: 220px;
+    background: #171b24;
+    color: #e6e8eb;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  #sidebar h1 {
+    font-size: 15px;
+    padding: 18px 18px 10px;
+    margin: 0;
+    border-bottom: 1px solid #262b34;
+  }
+  #sidebar .menu-item {
+    padding: 12px 18px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #b7bec9;
+    border-left: 3px solid transparent;
+  }
+  #sidebar .menu-item:hover { background: #1f2530; color: #fff; }
+  #sidebar .menu-item.active {
+    background: #1f2530;
+    color: #fff;
+    border-left-color: var(--accent);
+    font-weight: 600;
+  }
+  #sidebar .settings {
+    margin-top: auto;
+    padding: 14px 18px;
+    border-top: 1px solid #262b34;
+    font-size: 11px;
+  }
+  #sidebar .settings label { display: block; color: #8a919e; margin-bottom: 4px; }
+  #sidebar .settings input {
+    width: 100%;
+    background: #0f1115;
+    border: 1px solid #262b34;
+    color: #e6e8eb;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+  #sidebar .settings .status { margin-top: 6px; font-size: 11px; }
+  #sidebar .settings .status.ok { color: var(--ok); }
+  #sidebar .settings .status.err { color: var(--danger); }
+
+  #main { flex: 1; overflow-y: auto; padding: 28px 34px; }
+  #main h2 { margin: 0 0 4px; font-size: 20px; }
+  #main .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+
+  .toolbar { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; }
+  .toolbar label { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  button:hover { background: var(--accent-dark); }
+  button.secondary { background: #e9edf3; color: var(--text); }
+  button.secondary:hover { background: #dde3ec; }
+  button.danger { background: var(--danger); }
+  button.danger:hover { background: #c93d41; }
+  button.small { padding: 4px 10px; font-size: 12px; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  th { background: #f0f2f6; color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  td.actions { text-align: right; white-space: nowrap; }
+  .empty-row td { text-align: center; color: var(--muted); padding: 24px; }
+  .invalid-badge {
+    background: #ffe8e8; color: var(--danger);
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    display: none; align-items: center; justify-content: center; z-index: 10;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--panel); border-radius: 10px; padding: 22px 24px;
+    width: 380px; max-width: 90vw;
+  }
+  .modal h3 { margin: 0 0 14px; font-size: 16px; }
+  .modal .field { margin-bottom: 12px; }
+  .modal .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .modal .field input, .modal .field select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 13px;
+  }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .msg { font-size: 12px; margin-top: 8px; }
+  .msg.err { color: var(--danger); }
+  .msg.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>sinear &middot; CRUD</h1>
+  <div id="menu"></div>
+  <div class="settings">
+    <label>API Database Server</label>
+    <input type="text" id="apiBase" placeholder="http://localhost:8080">
+    <div class="status" id="apiStatus"></div>
+  </div>
+</div>
+
+<div id="main"></div>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <h3 id="modalTitle">Add Data</h3>
+    <div id="modalFields"></div>
+    <div class="msg" id="modalMsg"></div>
+    <div class="actions">
+      <button class="secondary" id="modalCancel">Cancel</button>
+      <button id="modalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- Entity schema configuration (CRUD menu) ----------
+const ENTITIES = [
+  {
+    key: 'suppliers', label: 'Suppliers', table: 'suppliers_table',
+    listAlias: 'suppliers', historyAlias: 'suppliers_history', refLabelField: 'name',
+    fields: [
+      { name: 'name', label: 'Name', type: 'string' },
+      { name: 'address', label: 'Address', type: 'string' }
+    ]
+  },
+  {
+    key: 'products', label: 'Products', table: 'products_table',
+    listAlias: 'products', historyAlias: 'products_history', refLabelField: 'name',
+    fields: [
+      { name: 'name', label: 'Product Name', type: 'string' },
+      { name: 'size', label: 'Size', type: 'string' },
+      { name: 'price', label: 'Price', type: 'int' }
+    ]
+  },
+  {
+    key: 'orders', label: 'Orders', table: 'orders_table',
+    listAlias: 'orders', historyAlias: 'orders_history', refLabelField: 'notes',
+    fields: [
+      { name: 'notes', label: 'Notes', type: 'string' }
+    ]
+  },
+  {
+    key: 'ordersubjects', label: 'Order Subjects', table: 'ordersubjects_table',
+    listAlias: 'ordersubjects', historyAlias: 'ordersubjects_history', refLabelField: 'id',
+    fields: [
+      { name: 'order_id', label: 'Order', type: 'ref', ref: 'orders' },
+      { name: 'date', label: 'Date', type: 'string' },
+      { name: 'supplier_id', label: 'Supplier', type: 'ref', ref: 'suppliers' },
+      { name: 'status', label: 'Status', type: 'string' }
+    ]
+  },
+  {
+    key: 'ordercontents', label: 'Order Contents', table: 'ordercontents_table',
+    listAlias: 'ordercontents', historyAlias: 'ordercontents_history', refLabelField: 'id',
+    fields: [
+      { name: 'order_id', label: 'Order', type: 'ref', ref: 'orders' },
+      { name: 'product_id', label: 'Product', type: 'ref', ref: 'products' },
+      { name: 'qty', label: 'Qty', type: 'float' },
+      { name: 'disc', label: 'Discount', type: 'int' },
+      { name: 'notes', label: 'Notes', type: 'string' }
+    ]
+  }
+];
+
+let apiBase = localStorage.getItem('nimdb_api_base') || (location.hostname ? ('http://' + location.hostname + ':8080') : 'http://localhost:8080');
+let activeEntity = ENTITIES[0];
+let showHistory = false;
+let editingRef = null; // field currently filled via a ref dropdown (used for option caching)
+
+const apiBaseInput = document.getElementById('apiBase');
+const apiStatus = document.getElementById('apiStatus');
+apiBaseInput.value = apiBase;
+apiBaseInput.addEventListener('change', () => {
+  apiBase = apiBaseInput.value.trim().replace(/\/$/, '');
+  localStorage.setItem('nimdb_api_base', apiBase);
+  loadEntity(activeEntity.key);
+});
+
+// ---------- Communication with the database server (sinear --server) ----------
+async function runCommand(cmd) {
+  const res = await fetch(apiBase + '/api/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command: cmd })
+  });
+  const data = await res.json();
+  apiStatus.textContent = res.ok ? 'Connected' : (data.error || data.output || 'Error');
+  apiStatus.className = 'status ' + (res.ok ? 'ok' : 'err');
+  if (!res.ok) throw new Error(data.error || data.output || ('HTTP ' + res.status));
+  return data.output || '';
+}
+
+// Parser for sinear's plain-text table output (format "col | col | \n---- - ---- - \nval | val |")
+function parseTable(text) {
+  const lines = text.split('\n').filter(l => l.trim().length > 0);
+  if (lines.length < 2) return { headers: [], rows: [] };
+  const headers = lines[0].split('|').map(s => s.trim()).filter(s => s.length > 0);
+  const rows = [];
+  for (let i = 2; i < lines.length; i++) {
+    const cells = lines[i].split('|').map(s => s.trim());
+    cells.pop(); // discard the empty element after the trailing '|'
+    if (cells.length > 0) rows.push(cells);
+  }
+  return { headers, rows };
+}
+
+function sqlQuote(val, type) {
+  if (type === 'int' || type === 'float' || type === 'ref') {
+    return String(val).trim();
+  }
+  const v = String(val).trim();
+  return "'" + (v.length === 0 ? ' ' : v.replace(/'/g, '')) + "'";
+}
+
+// ---------- Render sidebar menu ----------
+const menuEl = document.getElementById('menu');
+ENTITIES.forEach(ent => {
+  const item = document.createElement('div');
+  item.className = 'menu-item' + (ent.key === activeEntity.key ? ' active' : '');
+  item.textContent = ent.label;
+  item.dataset.key = ent.key;
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
+    item.classList.add('active');
+    showHistory = false;
+    loadEntity(ent.key);
+  });
+  menuEl.appendChild(item);
+});
+
+// ---------- Render main page per entity ----------
+const mainEl = document.getElementById('main');
+
+async function loadEntity(key) {
+  activeEntity = ENTITIES.find(e => e.key === key);
+  mainEl.innerHTML = '';
+
+  const h2 = document.createElement('h2');
+  h2.textContent = activeEntity.label;
+  const sub = document.createElement('div');
+  sub.className = 'subtitle';
+  sub.textContent = 'Base table: ' + activeEntity.table + '  ·  active alias: ' + activeEntity.listAlias;
+  mainEl.appendChild(h2);
+  mainEl.appendChild(sub);
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'toolbar';
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = '+ Add ' + activeEntity.label;
+  addBtn.addEventListener('click', () => openCreateModal(activeEntity));
+  toolbar.appendChild(addBtn);
+
+  const histLabel = document.createElement('label');
+  const histCheck = document.createElement('input');
+  histCheck.type = 'checkbox';
+  histCheck.checked = showHistory;
+  histCheck.addEventListener('change', () => { showHistory = histCheck.checked; renderTable(); });
+  histLabel.appendChild(histCheck);
+  histLabel.append(' Show deleted records (history)');
+  toolbar.appendChild(histLabel);
+
+  mainEl.appendChild(toolbar);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.id = 'tableWrap';
+  tableWrap.textContent = 'Loading data...';
+  mainEl.appendChild(tableWrap);
+
+  await renderTable();
+}
+
+async function renderTable() {
+  const tableWrap = document.getElementById('tableWrap');
+  if (!tableWrap) return;
+  const ent = activeEntity;
+  const alias = showHistory ? ent.historyAlias : ent.listAlias;
+
+  try {
+    const output = await runCommand('select ' + alias);
+    const { headers, rows } = parseTable(output);
+
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const trh = document.createElement('tr');
+    headers.forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      trh.appendChild(th);
+    });
+    if (!showHistory) {
+      const th = document.createElement('th');
+      th.textContent = 'Actions';
+      trh.appendChild(th);
+    }
+    thead.appendChild(trh);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    if (rows.length === 0) {
+      const tr = document.createElement('tr');
+      tr.className = 'empty-row';
+      const td = document.createElement('td');
+      td.colSpan = headers.length + (showHistory ? 0 : 1);
+      td.textContent = '(no data)';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    } else {
+      rows.forEach(cells => {
+        const tr = document.createElement('tr');
+        cells.forEach((c, i) => {
+          const td = document.createElement('td');
+          if (showHistory && headers[i] === 'invalid_id') {
+            td.innerHTML = c ? '<span class="invalid-badge">deleted</span>' : '';
+          } else {
+            td.textContent = c;
+          }
+          tr.appendChild(td);
+        });
+        if (!showHistory) {
+          const td = document.createElement('td');
+          td.className = 'actions';
+          const idVal = cells[headers.indexOf('id')];
+
+          const editBtn = document.createElement('button');
+          editBtn.className = 'secondary small';
+          editBtn.textContent = 'Edit';
+          editBtn.style.marginRight = '6px';
+          editBtn.addEventListener('click', () => openEditModal(ent, headers, cells));
+          td.appendChild(editBtn);
+
+          const delBtn = document.createElement('button');
+          delBtn.className = 'danger small';
+          delBtn.textContent = 'Delete';
+          delBtn.addEventListener('click', () => deleteRow(ent, idVal));
+          td.appendChild(delBtn);
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      });
+    }
+    table.appendChild(tbody);
+
+    tableWrap.innerHTML = '';
+    tableWrap.appendChild(table);
+  } catch (err) {
+    tableWrap.textContent = 'Failed to load data: ' + err.message;
+  }
+}
+
+async function deleteRow(ent, idVal) {
+  if (!confirm('Delete the record with id ' + idVal + '? (soft-delete via the _invalid table)')) return;
+  try {
+    await runCommand("insert _invalid " + idVal + " '" + ent.key + "'");
+    await renderTable();
+  } catch (err) {
+    alert('Failed to delete: ' + err.message);
+  }
+}
+
+// ---------- Add-data modal ----------
+const modalBackdrop = document.getElementById('modalBackdrop');
+const modalTitle = document.getElementById('modalTitle');
+const modalFields = document.getElementById('modalFields');
+const modalMsg = document.getElementById('modalMsg');
+
+document.getElementById('modalCancel').addEventListener('click', closeModal);
+
+function closeModal() {
+  modalBackdrop.classList.remove('open');
+  modalMsg.textContent = '';
+}
+
+async function openCreateModal(ent) {
+  await openFormModal(ent, null, null);
+}
+
+async function openEditModal(ent, headers, cells) {
+  const idIdx = headers.indexOf('id');
+  const rowData = {};
+  headers.forEach((h, i) => { rowData[h] = cells[i]; });
+  await openFormModal(ent, rowData, cells[idIdx]);
+}
+
+async function openFormModal(ent, rowData, oldId) {
+  const isEdit = rowData !== null;
+  modalTitle.textContent = (isEdit ? 'Edit ' : 'Add ') + ent.label;
+  modalFields.innerHTML = '';
+  modalMsg.textContent = '';
+
+  for (const f of ent.fields) {
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+    const label = document.createElement('label');
+    label.textContent = f.label;
+    wrap.appendChild(label);
+
+    if (f.type === 'ref') {
+      const select = document.createElement('select');
+      select.dataset.field = f.name;
+      select.dataset.type = f.type;
+      select.innerHTML = '<option value="">Loading...</option>';
+      wrap.appendChild(select);
+      modalFields.appendChild(wrap);
+
+      const refEnt = ENTITIES.find(e => e.key === f.ref);
+      try {
+        const output = await runCommand('select ' + refEnt.listAlias);
+        const { headers, rows } = parseTable(output);
+        const idIdx = headers.indexOf('id');
+        const labelIdx = headers.indexOf(refEnt.refLabelField) >= 0 ? headers.indexOf(refEnt.refLabelField) : idIdx;
+        select.innerHTML = rows.map(r => `<option value="${r[idIdx]}">${r[idIdx]} - ${r[labelIdx]}</option>`).join('');
+        if (isEdit && rowData[f.name] !== undefined) {
+          select.value = rowData[f.name];
+        }
+      } catch (err) {
+        select.innerHTML = '<option value="">(failed to load options)</option>';
+      }
+    } else {
+      const input = document.createElement('input');
+      input.dataset.field = f.name;
+      input.dataset.type = f.type;
+      input.type = (f.type === 'int' || f.type === 'float') ? 'number' : 'text';
+      if (f.type === 'float') input.step = 'any';
+      if (isEdit && rowData[f.name] !== undefined) {
+        input.value = rowData[f.name];
+      }
+      wrap.appendChild(input);
+      modalFields.appendChild(wrap);
+    }
+  }
+
+  if (isEdit) {
+    const note = document.createElement('div');
+    note.className = 'msg';
+    note.style.color = 'var(--muted)';
+    note.textContent = 'Edit is simulated: the old record (id ' + oldId + ') will be marked as deleted, then saved as a new row (with a new id).';
+    modalFields.appendChild(note);
+  }
+
+  modalBackdrop.classList.add('open');
+
+  document.getElementById('modalSave').onclick = async () => {
+    const values = [];
+    for (const f of ent.fields) {
+      const el = modalFields.querySelector(`[data-field="${f.name}"]`);
+      const raw = el.value;
+      if (f.type !== 'string' && raw.trim().length === 0) {
+        modalMsg.className = 'msg err';
+        modalMsg.textContent = 'Field "' + f.label + '" is required.';
+        return;
+      }
+      values.push(sqlQuote(raw, f.type));
+    }
+    const insertCmd = 'insert ' + ent.table + ' ' + values.join(' ');
+
+    try {
+      if (isEdit) {
+        // Simulated UPDATE: invalidate the old row first, then insert the new version.
+        // If inserting the new row fails (e.g. due to LOOKUP), the old row is NOT
+        // automatically reactivated -- this is a consequence of the append-only pattern.
+        const invalidateOut = await runCommand("insert _invalid " + oldId + " '" + ent.key + "'");
+        if (invalidateOut.toLowerCase().includes('error')) {
+          modalMsg.className = 'msg err';
+          modalMsg.textContent = 'Failed to invalidate the old record: ' + invalidateOut.trim();
+          return;
+        }
+        const output = await runCommand(insertCmd);
+        if (output.toLowerCase().includes('error')) {
+          modalMsg.className = 'msg err';
+          modalMsg.textContent = 'The old record was invalidated, but saving the new version failed: ' + output.trim();
+          return;
+        }
+      } else {
+        const output = await runCommand(insertCmd);
+        if (output.toLowerCase().includes('error')) {
+          modalMsg.className = 'msg err';
+          modalMsg.textContent = output.trim();
+          return;
+        }
+      }
+      closeModal();
+      await renderTable();
+    } catch (err) {
+      modalMsg.className = 'msg err';
+      modalMsg.textContent = err.message;
+    }
+  };
+}
+
+// ---------- Start ----------
+loadEntity(activeEntity.key);
+</script>
+</body>
+</html>
