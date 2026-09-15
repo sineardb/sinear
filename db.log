@@ -1,0 +1,25 @@
+create _invalid id:int table_id:int table_name:string
+create products_table id:int name:string size:string price:int
+alias products_invalid id:id table_id:table_id select _invalid where table_name='products'
+alias products_history products_table.id:id products_table.name:name products_table.size:size products_table.price:price products_invalid.id:invalid_id select products_table left products_invalid on id=table_id
+alias products products_table.id:id products_table.name:name products_table.size:size products_table.price:price select products_table strip products_invalid on id=table_id
+create suppliers_table id:int name:string address:string
+alias suppliers_invalid id:id table_id:table_id select _invalid where table_name='suppliers'
+alias suppliers_history suppliers_table.id:id suppliers_table.name:name suppliers_table.address:address suppliers_invalid.id:invalid_id select suppliers_table left suppliers_invalid on id=table_id
+alias suppliers suppliers_table.id:id suppliers_table.name:name suppliers_table.address:address select suppliers_table strip suppliers_invalid on id=table_id
+create orders_table id:int notes:string
+alias orders_invalid id:id table_id:table_id select _invalid where table_name='orders'
+alias orders orders_table.id:id orders_table.notes:notes select orders_table strip orders_invalid on id=table_id
+create ordersubjects_table id:int order_id:int date:string supplier_id:int status:string
+lookup ordersubjects_table:supplier_id suppliers:id
+create ordercontents_table id:int order_id:int product_id:int qty:float disc:int notes:string
+alias orders_history orders_table.id:id orders_table.notes:notes orders_invalid.id:invalid_id select orders_table left orders_invalid on id=table_id
+alias ordersubjects_invalid id:id table_id:table_id select _invalid where table_name='ordersubjects'
+alias ordersubjects_history ordersubjects_table.id:id ordersubjects_table.order_id:order_id ordersubjects_table.date:date ordersubjects_table.supplier_id:supplier_id ordersubjects_table.status:status ordersubjects_invalid.id:invalid_id select ordersubjects_table left ordersubjects_invalid on id=table_id
+alias ordersubjects ordersubjects_table.id:id ordersubjects_table.order_id:order_id ordersubjects_table.date:date ordersubjects_table.supplier_id:supplier_id ordersubjects_table.status:status select ordersubjects_table strip ordersubjects_invalid on id=table_id
+lookup ordersubjects_table:order_id orders:id
+alias ordercontents_invalid id:id table_id:table_id select _invalid where table_name='ordercontents'
+alias ordercontents_history ordercontents_table.id:id ordercontents_table.order_id:order_id ordercontents_table.product_id:product_id ordercontents_table.qty:qty ordercontents_table.disc:disc ordercontents_table.notes:notes ordercontents_invalid.id:invalid_id select ordercontents_table left ordercontents_invalid on id=table_id
+alias ordercontents ordercontents_table.id:id ordercontents_table.order_id:order_id ordercontents_table.product_id:product_id ordercontents_table.qty:qty ordercontents_table.disc:disc ordercontents_table.notes:notes select ordercontents_table strip ordercontents_invalid on id=table_id
+lookup ordercontents_table:order_id orders:id
+lookup ordercontents_table:product_id products:id
