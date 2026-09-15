@@ -1,7 +1,5 @@
 # Sinear
 
-<https://github.com/sineardb/sinear>
-
 **Sinear** is a text-based database management system with an *append-only* mode (no physical edit/delete operations on data) built with the **Nim** programming language. This project simulates the basic functionality of an RDBMS in-memory, with a logging mechanism that keeps all table structures and data persistent — automatically recoverable (*log replay*) every time the application is restarted.
 
 Interaction happens through a command-line interface, a JSON HTTP API, or a web client (SPA), using simple declarative command syntax (`create`, `insert`, `select`, `where`, `limit`, `gather`, `sum`, etc.). *Update* and *delete* operations are simulated by combining tables, aliases, and `strip` relations.
@@ -26,7 +24,7 @@ Interaction happens through a command-line interface, a JSON HTTP API, or a web 
   - `%` (*like*, matches anywhere in the string), `!%` (matches at the start), `%!` (matches at the end).
 - **`ASORT` / `DSORT`** — ascending/descending sorting by column. Works consistently on both plain tables and aliases, including when combined with `WHERE` on the same line.
 - **`LIMIT`** — limits the number of result rows.
-- **`GATHER` & `SUM`** — data grouping with automatic sum/count aggregation.
+- **`GATHER [SUM]`** — data grouping with automatic sum/count aggregation. The group key can also be a **substring** of a column, and both the group and sum columns can be given a **custom output label**.
 - **Nested arithmetic expressions on aliases** — computed columns with `+ - * /` operators and unlimited nested parentheses. Supports operands that are either column names or literal numbers.
 - **Chaining SELECT with `&`** — multiple `SELECT` commands can be combined on one line separated by `&`, each executed in sequence producing separate tables. If a `SELECT` within the chain uses `WHERE field=value`, that `field` column is automatically hidden from the result table.
 
@@ -69,7 +67,7 @@ Sinear can run as an HTTP service in addition to the CLI:
 |---|---|
 | `CREATE <table> column:type ...` | Creates a new table |
 | `INSERT <table> [id] val ...` | Adds a new row of data |
-| `SELECT <table/alias> [WHERE ...] [ASORT/DSORT ...] [LIMIT ...] [GATHER ... SUM ...] [& SELECT ...]` | Displays/retrieves data |
+| `SELECT <table/alias> [WHERE ...] [ASORT/DSORT ...] [LIMIT ...] [GATHER (field,start,len):label SUM(field):label] [& SELECT ...]` | Displays/retrieves data |
 | `ALIAS <name> mapping ... select ...` | Creates an alias, including computed columns |
 | `LOOKUP <target>:field <source>:field [NODUP]` | Registers a reference-validation rule before insert |
 | `UNDO <object>` | Deletes a table/alias/lookup with safety validation |
