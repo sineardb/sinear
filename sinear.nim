@@ -221,6 +221,27 @@ proc getColumnValue(row: Row, table: Table, colIdx: int): string =
       return row.values[valIdx]
     return ""
 
+proc columnExistsForStatement(statement: Statement, db: Database, colName: string): bool =
+  let t1 = db.tables[findTableIndex(db, statement.targetTable)]
+  if findColumnIndexExtended(t1, statement.columnAliases, colName) != -1:
+    return true
+
+  if statement.kind in {stSelectJoin, stSelectStrip}:
+    let t2Idx = findTableIndex(db, statement.joinTable)
+    if t2Idx != -1:
+      let t2 = db.tables[t2Idx]
+      if findColumnIndex(t2, colName) != -1:
+        return true
+    else:
+      for v in db.views:
+        if v.name.toLowerAscii() == statement.joinTable.toLowerAscii():
+          let t2 = db.tables[findTableIndex(db, v.statement.targetTable)]
+          if findColumnIndexExtended(t2, v.columnAliases, colName) != -1:
+            return true
+          break
+
+  return false
+
 proc matchWhere(row: Row, table: Table, statement: Statement): bool =
   if not statement.hasWhere:
     return true
@@ -439,6 +460,87 @@ type GroupAggregate = object
   sumVal: float
   count: int
 
+proc findHeaderIndex(headers: seq[string], colName: string): int =
+  let colLower = colName.toLowerAscii()
+  for i, h in headers:
+    if h.toLowerAscii() == colLower or ('.' in h and h.split('.')[1].toLowerAscii() == colLower):
+      return i
+  return -1
+
+proc applyGatherSum(headers: seq[string], rows: seq[seq[string]], statement: Statement): tuple[headers: seq[string], rows: seq[seq[string]]] =
+  let gatherIdx = findHeaderIndex(headers, statement.gatherCol)
+  if gatherIdx == -1:
+    return (headers, rows)
+
+  var sumIdx = -1
+  if statement.hasSum:
+    sumIdx = findHeaderIndex(headers, statement.sumCol)
+
+  var groups: seq[GroupAggregate] = @[]
+  for row in rows:
+    let key = row[gatherIdx]
+    var valToAdd = 0.0
+    if statement.hasSum and sumIdx != -1:
+      try:
+        valToAdd = row[sumIdx].parseFloat()
+      except ValueError:
+        discard
+
+    var found = false
+    for g in groups.mitems:
+      if g.key == key:
+        g.sumVal += valToAdd
+        g.count.inc()
+        found = true
+        break
+    if not found:
+      groups.add(GroupAggregate(key: key, sumVal: valToAdd, count: 1))
+
+  var newHeaders: seq[string] = @[statement.gatherCol]
+  if statement.hasSum:
+    newHeaders.add("sum(" & statement.sumCol & ")")
+  else:
+    newHeaders.add("count")
+
+  var newRows: seq[seq[string]] = @[]
+  for g in groups:
+    var rowVals = newSeq[string](2)
+    rowVals[0] = g.key
+    if statement.hasSum:
+      rowVals[1] = $g.sumVal
+    else:
+      rowVals[1] = $g.count
+    newRows.add(rowVals)
+
+  if statement.hasSort:
+    let sortColLower = statement.sortCol.toLowerAscii()
+    let sortIdx = if sortColLower == statement.gatherCol.toLowerAscii(): 0 else: 1
+    newRows.sort(proc (a, b: seq[string]): int =
+      let valA = a[sortIdx]
+      let valB = b[sortIdx]
+      var cmpRes = 0
+      try:
+        let f1 = valA.parseFloat()
+        let f2 = valB.parseFloat()
+        cmpRes = system.cmp(f1, f2)
+      except ValueError:
+        try:
+          let n1 = valA.parseInt()
+          let n2 = valB.parseInt()
+          cmpRes = system.cmp(n1, n2)
+        except ValueError:
+          cmpRes = system.cmp(valA, valB)
+      if statement.sortDesc:
+        return -cmpRes
+      else:
+        return cmpRes
+    )
+
+  if statement.hasLimit and newRows.len > statement.limitVal:
+    newRows = newRows[0 ..< statement.limitVal]
+
+  return (newHeaders, newRows)
+
 proc printTableFiltered(table: Table, statement: Statement) =
   var matchingRows: seq[Row] = @[]
   for row in table.rows:
@@ -446,76 +548,27 @@ proc printTableFiltered(table: Table, statement: Statement) =
       matchingRows.add(row)
 
   if statement.hasGather:
-    let gatherColIdx = findColumnIndexExtended(table, statement.columnAliases, statement.gatherCol)
-    var groups: seq[GroupAggregate] = @[]
-
-    var sumColIdx = -1
-    if statement.hasSum:
-      sumColIdx = findColumnIndexExtended(table, statement.columnAliases, statement.sumCol)
-
-    for row in matchingRows:
-      let key = getColumnValue(row, table, gatherColIdx)
-      var valToAdd = 0.0
-      if statement.hasSum and sumColIdx != -1:
-        let sStr = getColumnValue(row, table, sumColIdx)
-        try:
-          valToAdd = sStr.parseFloat()
-        except ValueError:
-          discard
-
-      var found = false
-      for g in groups.mitems:
-        if g.key == key:
-          g.sumVal += valToAdd
-          g.count.inc()
-          found = true
-          break
-      if not found:
-        groups.add(GroupAggregate(key: key, sumVal: valToAdd, count: 1))
-
-    var headers: seq[string] = @[statement.gatherCol]
-    if statement.hasSum:
-      headers.add("sum(" & statement.sumCol & ")")
+    var colIndices: seq[int] = @[]
+    var rawHeaders: seq[string] = @[]
+    if statement.columnAliases.len > 0:
+      for mapping in statement.columnAliases:
+        let idx = findColumnIndex(table, mapping.orig)
+        if idx != -1:
+          colIndices.add(idx)
+          rawHeaders.add(mapping.alias)
     else:
-      headers.add("count")
+      for i in 0 ..< table.schema.columns.len:
+        colIndices.add(i)
+        rawHeaders.add(table.schema.columns[i].name)
 
-    var formattedRows: seq[seq[string]] = @[]
-    for g in groups:
-      var rowVals = newSeq[string](headers.len)
-      rowVals[0] = g.key
-      if statement.hasSum:
-        rowVals[1] = $g.sumVal
-      else:
-        rowVals[1] = $g.count
-      formattedRows.add(rowVals)
+    var rawRows: seq[seq[string]] = @[]
+    for row in matchingRows:
+      var rowVals: seq[string] = @[]
+      for idx in colIndices:
+        rowVals.add(getColumnValue(row, table, idx))
+      rawRows.add(rowVals)
 
-    if statement.hasSort:
-      let sortColLower = statement.sortCol.toLowerAscii()
-      let sortIdx = if sortColLower == statement.gatherCol.toLowerAscii(): 0 else: 1
-      formattedRows.sort(proc (a, b: seq[string]): int =
-        let valA = a[sortIdx]
-        let valB = b[sortIdx]
-        var cmpRes = 0
-        try:
-          let f1 = valA.parseFloat()
-          let f2 = valB.parseFloat()
-          cmpRes = system.cmp(f1, f2)
-        except ValueError:
-          try:
-            let n1 = valA.parseInt()
-            let n2 = valB.parseInt()
-            cmpRes = system.cmp(n1, n2)
-          except ValueError:
-            cmpRes = system.cmp(valA, valB)
-        
-        if statement.sortDesc:
-          return -cmpRes
-        else:
-          return cmpRes
-      )
-
-    if statement.hasLimit and formattedRows.len > statement.limitVal:
-      formattedRows = formattedRows[0 ..< statement.limitVal]
+    let (headers, formattedRows) = applyGatherSum(rawHeaders, rawRows, statement)
 
     var colWidths = newSeq[int](headers.len)
     for i, h in headers:
@@ -819,6 +872,9 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
                 rowVals[colIdxTracker] = ""
                 colIdxTracker.inc()
           joinedRows.add(rowVals)
+
+  if statement.hasGather:
+    return applyGatherSum(headers, joinedRows, statement)
 
   if statement.hasSort:
     var sortHeaderIdx = -1
@@ -1339,6 +1395,16 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
             colValid = true
 
       if not colValid:
+        var hasGatherToken = false
+        for p in parts:
+          if p.toLowerAscii() == "gather":
+            hasGatherToken = true
+            break
+        let sColLower = sCol.toLowerAscii()
+        if hasGatherToken and (sColLower == "count" or sColLower == "sum" or sColLower.startsWith("sum(")):
+          colValid = true
+
+      if not colValid:
         return prColumnNotFound
 
       statement.hasSort = true
@@ -1361,8 +1427,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
       if gatherIdx + 1 >= parts.len:
         return prSyntaxError
       let gCol = parts[gatherIdx + 1]
-      let t1 = db.tables[findTableIndex(db, statement.targetTable)]
-      if findColumnIndexExtended(t1, statement.columnAliases, gCol) == -1:
+      if not columnExistsForStatement(statement, db, gCol):
         return prColumnNotFound
       statement.hasGather = true
       statement.gatherCol = gCol
@@ -1388,8 +1453,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
           sCol = token[start + 1 .. finish - 1].strip()
         else:
           return prSyntaxError
-      let t1 = db.tables[findTableIndex(db, statement.targetTable)]
-      if findColumnIndexExtended(t1, statement.columnAliases, sCol) == -1:
+      if not columnExistsForStatement(statement, db, sCol):
         return prColumnNotFound
       statement.hasSum = true
       statement.sumCol = sCol
@@ -1601,6 +1665,16 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
           colValid = true
 
     if not colValid:
+      var hasGatherToken = false
+      for p in parts:
+        if p.toLowerAscii() == "gather":
+          hasGatherToken = true
+          break
+      let sColLower = sCol.toLowerAscii()
+      if hasGatherToken and (sColLower == "count" or sColLower == "sum" or sColLower.startsWith("sum(")):
+        colValid = true
+
+    if not colValid:
       return prColumnNotFound
 
     statement.hasSort = true
@@ -1623,8 +1697,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
     if gatherIdx + 1 >= parts.len:
       return prSyntaxError
     let gCol = parts[gatherIdx + 1]
-    let t1 = db.tables[findTableIndex(db, statement.targetTable)]
-    if findColumnIndexExtended(t1, statement.columnAliases, gCol) == -1:
+    if not columnExistsForStatement(statement, db, gCol):
       return prColumnNotFound
     statement.hasGather = true
     statement.gatherCol = gCol
@@ -1643,8 +1716,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
         sCol = token[start + 1 .. finish - 1].strip()
       else:
         return prSyntaxError
-    let t1 = db.tables[findTableIndex(db, statement.targetTable)]
-    if findColumnIndexExtended(t1, statement.columnAliases, sCol) == -1:
+    if not columnExistsForStatement(statement, db, sCol):
       return prColumnNotFound
     statement.hasSum = true
     statement.sumCol = sCol
