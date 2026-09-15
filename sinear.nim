@@ -74,8 +74,13 @@ type
     limitVal: int
     hasGather: bool
     gatherCol: string
+    gatherIsSubstr: bool
+    gatherSubstrStart: int
+    gatherSubstrLen: int
+    gatherLabel: string
     hasSum: bool
     sumCol: string
+    sumLabel: string
     isAutoId: bool
     aliasName: string
     objectTarget: string
@@ -220,6 +225,88 @@ proc getColumnValue(row: Row, table: Table, colIdx: int): string =
     if valIdx >= 0 and valIdx < row.values.len:
       return row.values[valIdx]
     return ""
+
+type GatherSpec = object
+  field: string
+  isSubstr: bool
+  substrStart: int
+  substrLen: int
+  label: string
+  valid: bool
+
+proc parseGatherToken(token: string): GatherSpec =
+  ## Mendukung dua bentuk:
+  ##   gather <field>            -> group by nilai kolom apa adanya
+  ##   gather <field>:<label>    -> group by nilai kolom, header hasil diberi nama <label>
+  ##   gather (field,start,len):<label> -> group by substring kolom (posisi 0-based, panjang len)
+  result.valid = false
+  if token.len == 0:
+    return
+
+  if token.startsWith("("):
+    let closeParen = token.find(')')
+    if closeParen == -1:
+      return
+    let inner = token[1 ..< closeParen]
+    let specParts = inner.split(',')
+    if specParts.len != 3:
+      return
+    let field = specParts[0].strip()
+    var startVal, lenVal: int
+    try:
+      startVal = specParts[1].strip().parseInt()
+      lenVal = specParts[2].strip().parseInt()
+    except ValueError:
+      return
+    var label = field
+    let remainder = token[closeParen + 1 .. ^1]
+    if remainder.len > 0:
+      if remainder[0] != ':' or remainder.len < 2:
+        return
+      label = remainder[1 .. ^1].strip()
+    result = GatherSpec(field: field, isSubstr: true, substrStart: startVal, substrLen: lenVal, label: label, valid: true)
+  else:
+    let colonPos = token.find(':')
+    if colonPos == -1:
+      result = GatherSpec(field: token, isSubstr: false, label: token, valid: true)
+    else:
+      let field = token[0 ..< colonPos].strip()
+      let label = token[colonPos + 1 .. ^1].strip()
+      if field.len == 0 or label.len == 0:
+        return
+      result = GatherSpec(field: field, isSubstr: false, label: label, valid: true)
+
+type SumSpec = object
+  field: string
+  label: string
+  valid: bool
+
+proc parseSumToken(token: string): SumSpec =
+  ## Mendukung "sum(field)" dan "sum(field):label" (nama kolom hasil kustom).
+  result.valid = false
+  let start = token.find('(')
+  let finish = token.find(')')
+  if start == -1 or finish == -1 or finish <= start:
+    return
+  let field = token[start + 1 ..< finish].strip()
+  if field.len == 0:
+    return
+  var label = "sum(" & field & ")"
+  let remainder = token[finish + 1 .. ^1]
+  if remainder.len > 0:
+    if remainder[0] != ':' or remainder.len < 2:
+      return
+    label = remainder[1 .. ^1].strip()
+  result = SumSpec(field: field, label: label, valid: true)
+
+proc extractSubstr(s: string, startPos: int, length: int): string =
+  if length <= 0 or startPos >= s.len:
+    return ""
+  let realStart = max(0, startPos)
+  let realEnd = min(s.len, realStart + length) - 1
+  if realEnd < realStart:
+    return ""
+  return s[realStart .. realEnd]
 
 proc columnExistsForStatement(statement: Statement, db: Database, colName: string): bool =
   let t1 = db.tables[findTableIndex(db, statement.targetTable)]
@@ -478,7 +565,9 @@ proc applyGatherSum(headers: seq[string], rows: seq[seq[string]], statement: Sta
 
   var groups: seq[GroupAggregate] = @[]
   for row in rows:
-    let key = row[gatherIdx]
+    var key = row[gatherIdx]
+    if statement.gatherIsSubstr:
+      key = extractSubstr(key, statement.gatherSubstrStart, statement.gatherSubstrLen)
     var valToAdd = 0.0
     if statement.hasSum and sumIdx != -1:
       try:
@@ -496,9 +585,11 @@ proc applyGatherSum(headers: seq[string], rows: seq[seq[string]], statement: Sta
     if not found:
       groups.add(GroupAggregate(key: key, sumVal: valToAdd, count: 1))
 
-  var newHeaders: seq[string] = @[statement.gatherCol]
+  let gatherHeader = if statement.gatherLabel.len > 0: statement.gatherLabel else: statement.gatherCol
+  var newHeaders: seq[string] = @[gatherHeader]
   if statement.hasSum:
-    newHeaders.add("sum(" & statement.sumCol & ")")
+    let sumHeader = if statement.sumLabel.len > 0: statement.sumLabel else: "sum(" & statement.sumCol & ")"
+    newHeaders.add(sumHeader)
   else:
     newHeaders.add("count")
 
@@ -514,7 +605,8 @@ proc applyGatherSum(headers: seq[string], rows: seq[seq[string]], statement: Sta
 
   if statement.hasSort:
     let sortColLower = statement.sortCol.toLowerAscii()
-    let sortIdx = if sortColLower == statement.gatherCol.toLowerAscii(): 0 else: 1
+    let isGatherCol = sortColLower == statement.gatherCol.toLowerAscii() or sortColLower == gatherHeader.toLowerAscii()
+    let sortIdx = if isGatherCol: 0 else: 1
     newRows.sort(proc (a, b: seq[string]): int =
       let valA = a[sortIdx]
       let valB = b[sortIdx]
@@ -1400,8 +1492,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
           if p.toLowerAscii() == "gather":
             hasGatherToken = true
             break
-        let sColLower = sCol.toLowerAscii()
-        if hasGatherToken and (sColLower == "count" or sColLower == "sum" or sColLower.startsWith("sum(")):
+        if hasGatherToken:
           colValid = true
 
       if not colValid:
@@ -1426,11 +1517,17 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
     if gatherIdx != -1:
       if gatherIdx + 1 >= parts.len:
         return prSyntaxError
-      let gCol = parts[gatherIdx + 1]
-      if not columnExistsForStatement(statement, db, gCol):
+      let gSpec = parseGatherToken(parts[gatherIdx + 1])
+      if not gSpec.valid:
+        return prSyntaxError
+      if not columnExistsForStatement(statement, db, gSpec.field):
         return prColumnNotFound
       statement.hasGather = true
-      statement.gatherCol = gCol
+      statement.gatherCol = gSpec.field
+      statement.gatherIsSubstr = gSpec.isSubstr
+      statement.gatherSubstrStart = gSpec.substrStart
+      statement.gatherSubstrLen = gSpec.substrLen
+      statement.gatherLabel = gSpec.label
 
     var sumIdx = -1
     for i in 2 ..< parts.len:
@@ -1440,23 +1537,22 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
         break
 
     if sumIdx != -1:
-      var sCol = ""
+      var sSpec: SumSpec
       let token = parts[sumIdx]
       if token.toLowerAscii() == "sum":
         if sumIdx + 1 >= parts.len:
           return prSyntaxError
-        sCol = parts[sumIdx + 1]
+        let sCol = parts[sumIdx + 1]
+        sSpec = SumSpec(field: sCol, label: "sum(" & sCol & ")", valid: true)
       else:
-        let start = token.find('(')
-        let finish = token.find(')')
-        if start != -1 and finish != -1 and finish > start:
-          sCol = token[start + 1 .. finish - 1].strip()
-        else:
+        sSpec = parseSumToken(token)
+        if not sSpec.valid:
           return prSyntaxError
-      if not columnExistsForStatement(statement, db, sCol):
+      if not columnExistsForStatement(statement, db, sSpec.field):
         return prColumnNotFound
       statement.hasSum = true
-      statement.sumCol = sCol
+      statement.sumCol = sSpec.field
+      statement.sumLabel = sSpec.label
 
     return prSuccess
 
@@ -1670,8 +1766,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
         if p.toLowerAscii() == "gather":
           hasGatherToken = true
           break
-      let sColLower = sCol.toLowerAscii()
-      if hasGatherToken and (sColLower == "count" or sColLower == "sum" or sColLower.startsWith("sum(")):
+      if hasGatherToken:
         colValid = true
 
     if not colValid:
@@ -1696,30 +1791,35 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
   if gatherIdx != -1:
     if gatherIdx + 1 >= parts.len:
       return prSyntaxError
-    let gCol = parts[gatherIdx + 1]
-    if not columnExistsForStatement(statement, db, gCol):
+    let gSpec = parseGatherToken(parts[gatherIdx + 1])
+    if not gSpec.valid:
+      return prSyntaxError
+    if not columnExistsForStatement(statement, db, gSpec.field):
       return prColumnNotFound
     statement.hasGather = true
-    statement.gatherCol = gCol
+    statement.gatherCol = gSpec.field
+    statement.gatherIsSubstr = gSpec.isSubstr
+    statement.gatherSubstrStart = gSpec.substrStart
+    statement.gatherSubstrLen = gSpec.substrLen
+    statement.gatherLabel = gSpec.label
 
   if sumIdx != -1:
-    var sCol = ""
+    var sSpec: SumSpec
     let token = parts[sumIdx]
     if token.toLowerAscii() == "sum":
       if sumIdx + 1 >= parts.len:
         return prSyntaxError
-      sCol = parts[sumIdx + 1]
+      let sCol = parts[sumIdx + 1]
+      sSpec = SumSpec(field: sCol, label: "sum(" & sCol & ")", valid: true)
     else:
-      let start = token.find('(')
-      let finish = token.find(')')
-      if start != -1 and finish != -1 and finish > start:
-        sCol = token[start + 1 .. finish - 1].strip()
-      else:
+      sSpec = parseSumToken(token)
+      if not sSpec.valid:
         return prSyntaxError
-    if not columnExistsForStatement(statement, db, sCol):
+    if not columnExistsForStatement(statement, db, sSpec.field):
       return prColumnNotFound
     statement.hasSum = true
-    statement.sumCol = sCol
+    statement.sumCol = sSpec.field
+    statement.sumLabel = sSpec.label
 
   return prSuccess
 
