@@ -1395,7 +1395,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
             colValid = true
 
       if not colValid:
-        var hasGatherToken = false
+        var hasGatherToken = statement.hasGather
         for p in parts:
           if p.toLowerAscii() == "gather":
             hasGatherToken = true
@@ -1740,7 +1740,7 @@ proc prepareAlias(parts: seq[string], statement: var Statement, db: Database): P
       selectIdx = i
       break
 
-  if selectIdx == -1 or selectIdx <= 2:
+  if selectIdx == -1:
     return prSyntaxError
 
   var colAliases: seq[tuple[orig: string, alias: string]] = @[]
