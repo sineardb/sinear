@@ -191,6 +191,7 @@ const ENTITIES = [
   {
     key: 'orders', label: 'Orders', table: 'orders_table',
     listAlias: 'orders', historyAlias: 'orders_history', refLabelField: 'notes',
+    allowEdit: false,
     fields: [
       { name: 'notes', label: 'Notes', type: 'string' }
     ]
@@ -198,6 +199,7 @@ const ENTITIES = [
   {
     key: 'ordersubjects', label: 'Order Subjects', table: 'ordersubjects_table',
     listAlias: 'ordersubjects', historyAlias: 'ordersubjects_history', refLabelField: 'id',
+    allowDelete: false,
     fields: [
       { name: 'order_id', label: 'Order', type: 'ref', ref: 'orders' },
       { name: 'date', label: 'Date', type: 'string' },
@@ -378,18 +380,22 @@ async function renderTable() {
           td.className = 'actions';
           const idVal = cells[headers.indexOf('id')];
 
-          const editBtn = document.createElement('button');
-          editBtn.className = 'secondary small';
-          editBtn.textContent = 'Edit';
-          editBtn.style.marginRight = '6px';
-          editBtn.addEventListener('click', () => openEditModal(ent, headers, cells));
-          td.appendChild(editBtn);
+          if (ent.allowEdit !== false) {
+            const editBtn = document.createElement('button');
+            editBtn.className = 'secondary small';
+            editBtn.textContent = 'Edit';
+            editBtn.style.marginRight = '6px';
+            editBtn.addEventListener('click', () => openEditModal(ent, headers, cells));
+            td.appendChild(editBtn);
+          }
 
-          const delBtn = document.createElement('button');
-          delBtn.className = 'danger small';
-          delBtn.textContent = 'Delete';
-          delBtn.addEventListener('click', () => deleteRow(ent, idVal));
-          td.appendChild(delBtn);
+          if (ent.allowDelete !== false) {
+            const delBtn = document.createElement('button');
+            delBtn.className = 'danger small';
+            delBtn.textContent = 'Delete';
+            delBtn.addEventListener('click', () => deleteRow(ent, idVal));
+            td.appendChild(delBtn);
+          }
           tr.appendChild(td);
         }
         tbody.appendChild(tr);
