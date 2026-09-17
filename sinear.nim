@@ -55,6 +55,7 @@ type
     sourceTable: string
     sourceField: string
     noDup: bool
+    dupCheckTable: string
     rawLine: string
 
   Statement = object
@@ -91,6 +92,7 @@ type
     lookupSourceTable: string
     lookupSourceField: string
     lookupNoDup: bool
+    lookupDupCheckTable: string
     undoObjectName: string
     undoKind: UndoObjectKind
     subStatement: ref Statement
@@ -1168,14 +1170,17 @@ proc resolveLookupSource(db: Database, sourceName: string, sourceField: string):
   return (false, newSeq[string]())
 
 proc prepareLookup(parts: seq[string], statement: var Statement, db: Database): PrepareResult =
-  if parts.len != 3 and parts.len != 4:
+  if parts.len < 3 or parts.len > 5:
     return prSyntaxError
 
   var noDup = false
-  if parts.len == 4:
+  var dupCheckTable = ""
+  if parts.len == 4 or parts.len == 5:
     if parts[3].toUpperAscii() != "NODUP":
       return prSyntaxError
     noDup = true
+    if parts.len == 5:
+      dupCheckTable = parts[4].strip()
 
   let targetSpec = parts[1].split(':')
   let sourceSpec = parts[2].split(':')
@@ -1205,12 +1210,26 @@ proc prepareLookup(parts: seq[string], statement: var Statement, db: Database): 
       return prTableNotFound
     return prColumnNotFound
 
+  if dupCheckTable.len > 0:
+    let dupCheck = resolveLookupSource(db, dupCheckTable, targetField)
+    if not dupCheck.valid:
+      var dupTableExists = (findTableIndex(db, dupCheckTable) != -1)
+      if not dupTableExists:
+        for v in db.views:
+          if v.name.toLowerAscii() == dupCheckTable.toLowerAscii():
+            dupTableExists = true
+            break
+      if not dupTableExists:
+        return prTableNotFound
+      return prColumnNotFound
+
   statement.kind = stLookup
   statement.targetTable = targetTable
   statement.lookupTargetField = targetField
   statement.lookupSourceTable = sourceTable
   statement.lookupSourceField = sourceField
   statement.lookupNoDup = noDup
+  statement.lookupDupCheckTable = dupCheckTable
   return prSuccess
 
 proc validateLookupRules(db: Database, targetTable: string, row: Row): PrepareResult =
@@ -1241,9 +1260,16 @@ proc validateLookupRules(db: Database, targetTable: string, row: Row): PrepareRe
       return prLookupNotFound
 
     if rule.noDup:
-      for existingRow in table.rows:
-        if getColumnValue(existingRow, table, fieldIdx) == insertVal:
-          return prDuplicateData
+      if rule.dupCheckTable.len > 0:
+        let dupSource = resolveLookupSource(db, rule.dupCheckTable, rule.targetField)
+        if dupSource.valid:
+          for v in dupSource.values:
+            if v == insertVal:
+              return prDuplicateData
+      else:
+        for existingRow in table.rows:
+          if getColumnValue(existingRow, table, fieldIdx) == insertVal:
+            return prDuplicateData
 
   return prSuccess
 
@@ -1939,6 +1965,7 @@ proc executeLookup(statement: Statement, db: var Database, rawLine: string = "")
     sourceTable: statement.lookupSourceTable,
     sourceField: statement.lookupSourceField,
     noDup: statement.lookupNoDup,
+    dupCheckTable: statement.lookupDupCheckTable,
     rawLine: rawLine
   )
   db.lookups.add(rule)
@@ -2018,6 +2045,8 @@ proc executeObject(statement: Statement, db: Database) =
       var line = " - " & lk.targetTable & ":" & lk.targetField & " -> " & lk.sourceTable & ":" & lk.sourceField
       if lk.noDup:
         line.add(" NODUP")
+        if lk.dupCheckTable.len > 0:
+          line.add(" " & lk.dupCheckTable)
       outp line
 
 proc executeStatement(statement: Statement, db: var Database, rawLine: string = ""): ExecuteResult =
@@ -2469,7 +2498,7 @@ proc runCrudServer(port: int, htmlFile: string) =
           let htmlContent = readFile(htmlFile)
           await req.respond(Http200, htmlContent, newHttpHeaders([("Content-Type", "text/html; charset=utf-8")]))
         except IOError:
-          await req.respond(Http500, "Gagal membaca file " & htmlFile, newHttpHeaders([("Content-Type", "text/plain")]))
+          await req.respond(Http500, "Failed to read file " & htmlFile, newHttpHeaders([("Content-Type", "text/plain")]))
       else:
         await req.respond(Http404, "Not Found", newHttpHeaders([("Content-Type", "text/plain")]))
 
