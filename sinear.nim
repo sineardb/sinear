@@ -216,7 +216,8 @@ proc findColumnIndexExtended(table: Table, columnAliases: seq[tuple[orig: string
     return idx
   for mapping in columnAliases:
     if mapping.alias.toLowerAscii() == colName.toLowerAscii() or mapping.orig.toLowerAscii() == colName.toLowerAscii():
-      return findColumnIndex(table, mapping.orig)
+      let cleanOrig = if '.' in mapping.orig: mapping.orig.split('.')[^1] else: mapping.orig
+      return findColumnIndex(table, cleanOrig)
   return -1
 
 proc getColumnValue(row: Row, table: Table, colIdx: int): string =
@@ -310,8 +311,14 @@ proc extractSubstr(s: string, startPos: int, length: int): string =
     return ""
   return s[realStart .. realEnd]
 
+proc materializeT1(statement: Statement, db: Database): tuple[table: Table, colAliases: seq[tuple[orig: string, alias: string]]]
+
 proc columnExistsForStatement(statement: Statement, db: Database, colName: string): bool =
-  let t1 = db.tables[findTableIndex(db, statement.targetTable)]
+  for cc in statement.computedCols:
+    if cc.alias.toLowerAscii() == colName.toLowerAscii():
+      return true
+
+  let t1 = materializeT1(statement, db).table
   if findColumnIndexExtended(t1, statement.columnAliases, colName) != -1:
     return true
 
@@ -324,6 +331,13 @@ proc columnExistsForStatement(statement: Statement, db: Database, colName: strin
     else:
       for v in db.views:
         if v.name.toLowerAscii() == statement.joinTable.toLowerAscii():
+          for cc in v.statement.computedCols:
+            if cc.alias.toLowerAscii() == colName.toLowerAscii():
+              return true
+          if v.statement.hasGather and (colName.toLowerAscii() == v.statement.gatherLabel.toLowerAscii() or colName.toLowerAscii() == v.statement.gatherCol.toLowerAscii()):
+            return true
+          if v.statement.hasSum and colName.toLowerAscii() == v.statement.sumLabel.toLowerAscii():
+            return true
           let t2 = db.tables[findTableIndex(db, v.statement.targetTable)]
           if findColumnIndexExtended(t2, v.columnAliases, colName) != -1:
             return true
@@ -539,6 +553,69 @@ proc evalComputedColumn(row: Row, table: Table, statement: Statement, cc: Comput
   except ValueError:
     return "N/A"
 
+proc resolveOperandJoin(r1: Row, t1: Table, r2: Row, t2: Table, t2ColumnAliases: seq[tuple[orig: string, alias: string]], statement: Statement, name: string): string =
+  try:
+    discard name.parseFloat()
+    return name
+  except ValueError:
+    discard
+
+  if '.' in name:
+    let dotIdx = name.find('.')
+    let prefix = name[0 ..< dotIdx].toLowerAscii()
+    let colName = name[dotIdx + 1 .. ^1]
+    if prefix == t1.schema.name.toLowerAscii() or prefix == statement.targetTable.toLowerAscii():
+      let idx = findColumnIndex(t1, colName)
+      if idx != -1:
+        return getColumnValue(r1, t1, idx)
+    if prefix == t2.schema.name.toLowerAscii() or prefix == statement.joinTable.toLowerAscii():
+      let idx = findColumnIndex(t2, colName)
+      if idx != -1:
+        return getColumnValue(r2, t2, idx)
+    return ""
+
+  for mapping in statement.columnAliases:
+    if mapping.alias.toLowerAscii() == name.toLowerAscii():
+      return resolveOperandJoin(r1, t1, r2, t2, t2ColumnAliases, statement, mapping.orig)
+
+  let idx1 = findColumnIndex(t1, name)
+  if idx1 != -1:
+    return getColumnValue(r1, t1, idx1)
+
+  let idx2 = findColumnIndexExtended(t2, t2ColumnAliases, name)
+  if idx2 != -1:
+    return getColumnValue(r2, t2, idx2)
+
+  return ""
+
+proc evalExprNodeJoin(node: ExprNode, r1: Row, t1: Table, r2: Row, t2: Table, t2ColumnAliases: seq[tuple[orig: string, alias: string]], statement: Statement): float =
+  case node.kind
+  of enkNum:
+    return node.numVal
+  of enkVar:
+    let s = resolveOperandJoin(r1, t1, r2, t2, t2ColumnAliases, statement, node.varName)
+    return s.parseFloat()
+  of enkBinOp:
+    let l = evalExprNodeJoin(node.left, r1, t1, r2, t2, t2ColumnAliases, statement)
+    let r = evalExprNodeJoin(node.right, r1, t1, r2, t2, t2ColumnAliases, statement)
+    case node.op
+    of '+': return l + r
+    of '-': return l - r
+    of '*': return l * r
+    of '/':
+      if r == 0.0:
+        raise newException(ValueError, "division by zero")
+      return l / r
+    else:
+      raise newException(ValueError, "unknown operator")
+
+proc evalComputedColumnJoin(r1: Row, t1: Table, r2: Row, t2: Table, t2ColumnAliases: seq[tuple[orig: string, alias: string]], statement: Statement, cc: ComputedColumn): string =
+  try:
+    let v = evalExprNodeJoin(cc.expr, r1, t1, r2, t2, t2ColumnAliases, statement)
+    return formatComputedValue(v)
+  except ValueError:
+    return "N/A"
+
 proc pad(s: string, width: int): string =
   if s.len >= width:
     return s
@@ -646,7 +723,8 @@ proc printTableFiltered(table: Table, statement: Statement) =
     var rawHeaders: seq[string] = @[]
     if statement.columnAliases.len > 0:
       for mapping in statement.columnAliases:
-        let idx = findColumnIndex(table, mapping.orig)
+        let cleanOrig = if '.' in mapping.orig: mapping.orig.split('.')[^1] else: mapping.orig
+        let idx = findColumnIndex(table, cleanOrig)
         if idx != -1:
           colIndices.add(idx)
           rawHeaders.add(mapping.alias)
@@ -702,7 +780,8 @@ proc printTableFiltered(table: Table, statement: Statement) =
 
   if statement.columnAliases.len > 0:
     for mapping in statement.columnAliases:
-      let idx = findColumnIndex(table, mapping.orig)
+      let cleanOrig = if '.' in mapping.orig: mapping.orig.split('.')[^1] else: mapping.orig
+      let idx = findColumnIndex(table, cleanOrig)
       if idx != -1:
         colIndices.add(idx)
         headers.add(mapping.alias)
@@ -798,9 +877,21 @@ proc printTableFiltered(table: Table, statement: Statement) =
       line.add(pad(val, w) & " | ")
     outp line
 
+proc materializeAsTable(name: string, headers: seq[string], rows: seq[seq[string]]): Table =
+  ## Membungkus hasil (headers, rows) yang sudah jadi (mis. dari alias JOIN/STRIP lain)
+  ## menjadi Table sintetis, supaya bisa dipakai lagi sebagai sisi JOIN pada query lain.
+  ## Kolom "id" sintetis ditambahkan di posisi 0 (nilai = indeks baris) supaya konvensi
+  ## colIdx 0 = id tetap konsisten dengan tabel asli.
+  var columns: seq[ColumnDef] = @[ColumnDef(name: "id", typ: "int")]
+  for h in headers:
+    columns.add(ColumnDef(name: h, typ: "string"))
+  var tblRows: seq[Row] = @[]
+  for i, r in rows:
+    tblRows.add(Row(id: i, values: r))
+  result = Table(schema: TableSchema(name: name, columns: columns), rawCreateLine: "", rows: tblRows)
+
 proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false): tuple[headers: seq[string], rows: seq[seq[string]]] =
-  let t1Idx = findTableIndex(db, statement.targetTable)
-  let t1 = db.tables[t1Idx]
+  let t1 = materializeT1(statement, db).table
 
   var t2Idx = findTableIndex(db, statement.joinTable)
   var v2Idx = -1
@@ -820,12 +911,18 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
   else:
     if v2Idx != -1:
       let joinView = db.views[v2Idx]
-      t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
       t2Name = joinView.name
-      t2ColumnAliases = joinView.columnAliases
-      for r2 in t2.rows:
-        if matchWhere(r2, t2, joinView.statement):
-          t2Rows.add(r2)
+      if joinView.statement.kind in {stSelectJoin, stSelectStrip}:
+        let (subHeaders, subRows) = computeJoinRows(joinView.statement, db, joinView.statement.kind == stSelectStrip)
+        t2 = materializeAsTable(joinView.name, subHeaders, subRows)
+        t2ColumnAliases = @[]
+        t2Rows = t2.rows
+      else:
+        t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
+        t2ColumnAliases = joinView.columnAliases
+        for r2 in t2.rows:
+          if matchWhere(r2, t2, joinView.statement):
+            t2Rows.add(r2)
 
   let c1Idx = findColumnIndexExtended(t1, statement.columnAliases, statement.joinCol1)
   let c2Idx = findColumnIndexExtended(t2, t2ColumnAliases, statement.joinCol2)
@@ -878,6 +975,10 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
       for col in t2.schema.columns:
         headers.add(t2Name & "." & col.name)
 
+  let baseNumCols = headers.len
+  for cc in statement.computedCols:
+    headers.add(cc.alias)
+
   let numCols = headers.len
 
   var joinedRows: seq[seq[string]] = @[]
@@ -917,6 +1018,8 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
               for i in 0 ..< t2.schema.columns.len:
                 rowVals[colIdxTracker] = ""
                 colIdxTracker.inc()
+          for k, cc in statement.computedCols:
+            rowVals[baseNumCols + k] = evalComputedColumnJoin(r1, t1, Row(id: 0, values: @[]), t2, t2ColumnAliases, statement, cc)
           joinedRows.add(rowVals)
     else:
       if matched:
@@ -942,6 +1045,8 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
               for i in 0 ..< t2.schema.columns.len:
                 rowVals[colIdxTracker] = getColumnValue(matchedR2, t2, i)
                 colIdxTracker.inc()
+          for k, cc in statement.computedCols:
+            rowVals[baseNumCols + k] = evalComputedColumnJoin(r1, t1, matchedR2, t2, t2ColumnAliases, statement, cc)
           joinedRows.add(rowVals)
       else:
         if matchJoinWhere(r1, t1, Row(id: 0, values: @[]), t2, t2ColumnAliases, statement):
@@ -965,6 +1070,8 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
               for i in 0 ..< t2.schema.columns.len:
                 rowVals[colIdxTracker] = ""
                 colIdxTracker.inc()
+          for k, cc in statement.computedCols:
+            rowVals[baseNumCols + k] = evalComputedColumnJoin(r1, t1, Row(id: 0, values: @[]), t2, t2ColumnAliases, statement, cc)
           joinedRows.add(rowVals)
 
   if statement.hasGather:
@@ -1022,6 +1129,27 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
       joinedRows = newRows
 
   return (headers, joinedRows)
+
+proc materializeT1(statement: Statement, db: Database): tuple[table: Table, colAliases: seq[tuple[orig: string, alias: string]]] =
+  let tIdx = findTableIndex(db, statement.targetTable)
+  if tIdx != -1:
+    return (db.tables[tIdx], statement.columnAliases)
+
+  for v in db.views:
+    if v.name.toLowerAscii() == statement.targetTable.toLowerAscii():
+      if v.statement.kind in {stSelectJoin, stSelectStrip}:
+        let (h, r) = computeJoinRows(v.statement, db, v.statement.kind == stSelectStrip)
+        return (materializeAsTable(v.name, h, r), @[])
+      else:
+        let baseIdx = findTableIndex(db, v.statement.targetTable)
+        let baseTable = db.tables[baseIdx]
+        var filteredRows: seq[Row] = @[]
+        for r in baseTable.rows:
+          if matchWhere(r, baseTable, v.statement):
+            filteredRows.add(r)
+        return (Table(schema: baseTable.schema, rawCreateLine: baseTable.rawCreateLine, rows: filteredRows), v.columnAliases)
+
+  return (Table(schema: TableSchema(name: statement.targetTable, columns: @[])), @[])
 
 proc executeSelectJoin(statement: Statement, db: Database, isStrip: bool = false): ExecuteResult =
   let (headers, joinedRows) = computeJoinRows(statement, db, isStrip)
@@ -1390,7 +1518,14 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
       viewIdx = i
       break
 
-  if viewIdx != -1:
+  var hasFreshJoinClause = false
+  for i in 2 ..< parts.len:
+    let tl = parts[i].toLowerAscii()
+    if tl == "left" or tl == "strip":
+      hasFreshJoinClause = true
+      break
+
+  if viewIdx != -1 and not hasFreshJoinClause:
     statement = db.views[viewIdx].statement
     statement.columnAliases = db.views[viewIdx].columnAliases
 
@@ -1462,7 +1597,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
       else:
         return prSyntaxError
 
-      let t1 = db.tables[findTableIndex(db, statement.targetTable)]
+      let t1 = materializeT1(statement, db).table
       var colValid = (findColumnIndexExtended(t1, statement.columnAliases, wCol) != -1)
       if not colValid and statement.kind in {stSelectJoin, stSelectStrip}:
         var t2Idx = findTableIndex(db, statement.joinTable)
@@ -1493,7 +1628,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
       if sortIdx + 1 >= parts.len:
         return prSyntaxError
       let sCol = parts[sortIdx + 1]
-      let t1 = db.tables[findTableIndex(db, statement.targetTable)]
+      let t1 = materializeT1(statement, db).table
       var colValid = (findColumnIndexExtended(t1, statement.columnAliases, sCol) != -1)
       if not colValid and statement.kind in {stSelectJoin, stSelectStrip}:
         var t2Idx = findTableIndex(db, statement.joinTable)
@@ -1583,7 +1718,13 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
     return prSuccess
 
   if findTableIndex(db, tableName) == -1:
-    return prTableNotFound
+    var foundAsView = false
+    for v in db.views:
+      if v.name.toLowerAscii() == tableName.toLowerAscii():
+        foundAsView = true
+        break
+    if not foundAsView:
+      return prTableNotFound
 
   var whereIdx = -1
   for i in 2 ..< parts.len:
@@ -1680,7 +1821,9 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
       else:
         return prSyntaxError
 
-      let t1 = db.tables[findTableIndex(db, tableName)]
+      let t1 = (block:
+        statement.targetTable = tableName
+        materializeT1(statement, db).table)
       var t2: Table
       var t2Aliases: seq[tuple[orig: string, alias: string]] = @[]
 
@@ -1736,7 +1879,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
     else:
       return prSyntaxError
 
-    let t1 = db.tables[findTableIndex(db, statement.targetTable)]
+    let t1 = materializeT1(statement, db).table
     var colValid = (findColumnIndexExtended(t1, statement.columnAliases, wCol) != -1)
     if not colValid and statement.kind in {stSelectJoin, stSelectStrip}:
       var t2Idx = findTableIndex(db, statement.joinTable)
@@ -1767,7 +1910,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
     if sortIdx + 1 >= parts.len:
       return prSyntaxError
     let sCol = parts[sortIdx + 1]
-    let t1 = db.tables[findTableIndex(db, statement.targetTable)]
+    let t1 = materializeT1(statement, db).table
     var colValid = (findColumnIndexExtended(t1, statement.columnAliases, sCol) != -1)
     if not colValid and statement.kind in {stSelectJoin, stSelectStrip}:
       var t2Idx = findTableIndex(db, statement.joinTable)
@@ -1895,13 +2038,14 @@ proc prepareAlias(parts: seq[string], statement: var Statement, db: Database): P
   if res != prSuccess:
     return res
 
-  subStmt.columnAliases = colAliases
-  subStmt.computedCols = computedCols
+  if colAliases.len > 0 or computedCols.len > 0:
+    subStmt.columnAliases = colAliases
+    subStmt.computedCols = computedCols
 
   statement.kind = stAlias
   statement.aliasName = aliasName
-  statement.columnAliases = colAliases
-  statement.computedCols = computedCols
+  statement.columnAliases = subStmt.columnAliases
+  statement.computedCols = subStmt.computedCols
   statement.subStatement = new Statement
   statement.subStatement[] = subStmt
   return prSuccess
