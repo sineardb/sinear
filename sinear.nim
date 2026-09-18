@@ -338,7 +338,7 @@ proc columnExistsForStatement(statement: Statement, db: Database, colName: strin
             return true
           if v.statement.hasSum and colName.toLowerAscii() == v.statement.sumLabel.toLowerAscii():
             return true
-          let t2 = db.tables[findTableIndex(db, v.statement.targetTable)]
+          let t2 = materializeT1(v.statement, db).table
           if findColumnIndexExtended(t2, v.columnAliases, colName) != -1:
             return true
           break
@@ -918,7 +918,7 @@ proc computeJoinRows(statement: Statement, db: Database, isStrip: bool = false):
         t2ColumnAliases = @[]
         t2Rows = t2.rows
       else:
-        t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
+        t2 = materializeT1(joinView.statement, db).table
         t2ColumnAliases = joinView.columnAliases
         for r2 in t2.rows:
           if matchWhere(r2, t2, joinView.statement):
@@ -1612,7 +1612,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
             colValid = true
         elif v2Idx != -1:
           let joinView = db.views[v2Idx]
-          let t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
+          let t2 = materializeT1(joinView.statement, db).table
           if findColumnIndexExtended(t2, joinView.columnAliases, wCol) != -1:
             colValid = true
 
@@ -1643,7 +1643,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
             colValid = true
         elif v2Idx != -1:
           let joinView = db.views[v2Idx]
-          let t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
+          let t2 = materializeT1(joinView.statement, db).table
           if findColumnIndexExtended(t2, joinView.columnAliases, sCol) != -1:
             colValid = true
 
@@ -1831,7 +1831,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
         t2 = db.tables[t2Idx]
       else:
         let joinView = db.views[v2Idx]
-        t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
+        t2 = materializeT1(joinView.statement, db).table
         t2Aliases = joinView.columnAliases
 
       if findColumnIndexExtended(t1, statement.columnAliases, col1) == -1 or findColumnIndexExtended(t2, t2Aliases, col2) == -1:
@@ -1894,7 +1894,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
           colValid = true
       elif v2Idx != -1:
         let joinView = db.views[v2Idx]
-        let t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
+        let t2 = materializeT1(joinView.statement, db).table
         if findColumnIndexExtended(t2, joinView.columnAliases, wCol) != -1:
           colValid = true
 
@@ -1925,7 +1925,7 @@ proc prepareSelect(parts: seq[string], statement: var Statement, db: Database): 
           colValid = true
       elif v2Idx != -1:
         let joinView = db.views[v2Idx]
-        let t2 = db.tables[findTableIndex(db, joinView.statement.targetTable)]
+        let t2 = materializeT1(joinView.statement, db).table
         if findColumnIndexExtended(t2, joinView.columnAliases, sCol) != -1:
           colValid = true
 
