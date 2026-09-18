@@ -220,6 +220,18 @@ const ENTITIES = [
   }
 ];
 
+// Laporan (read-only, hasil agregasi GATHER/SUM — tidak ada Add/Edit/Delete)
+const REPORTS = [
+  {
+    key: 'orders_report_daily', label: 'Daily Sales', listAlias: 'orders_report_daily',
+    description: 'Net order total grouped per day'
+  },
+  {
+    key: 'orders_report_monthly', label: 'Monthly Sales', listAlias: 'orders_report_monthly',
+    description: 'Net order total grouped per month'
+  }
+];
+
 let apiBase = localStorage.getItem('nimdb_api_base') || (location.hostname ? ('http://' + location.hostname + ':8080') : 'http://localhost:8080');
 let activeEntity = ENTITIES[0];
 let showHistory = false;
@@ -286,6 +298,24 @@ ENTITIES.forEach(ent => {
   menuEl.appendChild(item);
 });
 
+const reportsHeading = document.createElement('div');
+reportsHeading.textContent = 'Reports';
+reportsHeading.style.cssText = 'padding:14px 18px 6px;font-size:11px;color:#5c6472;text-transform:uppercase;letter-spacing:0.04em;';
+menuEl.appendChild(reportsHeading);
+
+REPORTS.forEach(rep => {
+  const item = document.createElement('div');
+  item.className = 'menu-item';
+  item.textContent = rep.label;
+  item.dataset.key = rep.key;
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.menu-item').forEach(el => el.classList.remove('active'));
+    item.classList.add('active');
+    loadReport(rep.key);
+  });
+  menuEl.appendChild(item);
+});
+
 // ---------- Render main page per entity ----------
 const mainEl = document.getElementById('main');
 
@@ -326,6 +356,67 @@ async function loadEntity(key) {
   mainEl.appendChild(tableWrap);
 
   await renderTable();
+}
+
+async function loadReport(key) {
+  const rep = REPORTS.find(r => r.key === key);
+  mainEl.innerHTML = '';
+
+  const h2 = document.createElement('h2');
+  h2.textContent = rep.label;
+  const sub = document.createElement('div');
+  sub.className = 'subtitle';
+  sub.textContent = (rep.description ? rep.description + '  ·  ' : '') + 'alias: ' + rep.listAlias + '  ·  read-only report';
+  mainEl.appendChild(h2);
+  mainEl.appendChild(sub);
+
+  const tableWrap = document.createElement('div');
+  tableWrap.id = 'tableWrap';
+  tableWrap.textContent = 'Loading data...';
+  mainEl.appendChild(tableWrap);
+
+  try {
+    const output = await runCommand('select ' + rep.listAlias);
+    const { headers, rows } = parseTable(output);
+
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const trh = document.createElement('tr');
+    headers.forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      trh.appendChild(th);
+    });
+    thead.appendChild(trh);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    if (rows.length === 0) {
+      const tr = document.createElement('tr');
+      tr.className = 'empty-row';
+      const td = document.createElement('td');
+      td.colSpan = headers.length;
+      td.textContent = '(no data)';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    } else {
+      rows.forEach(cells => {
+        const tr = document.createElement('tr');
+        cells.forEach(c => {
+          const td = document.createElement('td');
+          td.textContent = c;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+    table.appendChild(tbody);
+
+    tableWrap.innerHTML = '';
+    tableWrap.appendChild(table);
+  } catch (err) {
+    tableWrap.textContent = 'Failed to load data: ' + err.message;
+  }
 }
 
 async function renderTable() {
