@@ -10,16 +10,51 @@ alias suppliers suppliers_table.id:id suppliers_table.name:name suppliers_table.
 create orders_table id:int notes:string
 alias orders_invalid id:id table_id:table_id select _invalid where table_name='orders'
 alias orders orders_table.id:id orders_table.notes:notes select orders_table strip orders_invalid on id=table_id
-create ordersubjects_table id:int order_id:int date:string supplier_id:int status:string
-lookup ordersubjects_table:supplier_id suppliers:id
-create ordercontents_table id:int order_id:int product_id:int qty:float disc:int notes:string
 alias orders_history orders_table.id:id orders_table.notes:notes orders_invalid.id:invalid_id select orders_table left orders_invalid on id=table_id
+create ordersubjects_table id:int order_id:int date:string supplier_id:int status:string
 alias ordersubjects_invalid id:id table_id:table_id select _invalid where table_name='ordersubjects'
 alias ordersubjects_history ordersubjects_table.id:id ordersubjects_table.order_id:order_id ordersubjects_table.date:date ordersubjects_table.supplier_id:supplier_id ordersubjects_table.status:status ordersubjects_invalid.id:invalid_id select ordersubjects_table left ordersubjects_invalid on id=table_id
 alias ordersubjects ordersubjects_table.id:id ordersubjects_table.order_id:order_id ordersubjects_table.date:date ordersubjects_table.supplier_id:supplier_id ordersubjects_table.status:status select ordersubjects_table strip ordersubjects_invalid on id=table_id
-lookup ordersubjects_table:order_id orders:id
+lookup ordersubjects_table:order_id orders:id nodup ordersubjects
+lookup ordersubjects_table:supplier_id suppliers:id
+create ordercontents_table id:int order_id:int product_id:int qty:float disc:int notes:string
 alias ordercontents_invalid id:id table_id:table_id select _invalid where table_name='ordercontents'
 alias ordercontents_history ordercontents_table.id:id ordercontents_table.order_id:order_id ordercontents_table.product_id:product_id ordercontents_table.qty:qty ordercontents_table.disc:disc ordercontents_table.notes:notes ordercontents_invalid.id:invalid_id select ordercontents_table left ordercontents_invalid on id=table_id
 alias ordercontents ordercontents_table.id:id ordercontents_table.order_id:order_id ordercontents_table.product_id:product_id ordercontents_table.qty:qty ordercontents_table.disc:disc ordercontents_table.notes:notes select ordercontents_table strip ordercontents_invalid on id=table_id
 lookup ordercontents_table:order_id orders:id
 lookup ordercontents_table:product_id products:id
+alias order_lines_priced ordercontents.order_id:order_id ordercontents.qty:qty ordercontents.disc:disc products_table.price:price ((qty*price)-disc):net_total select ordercontents left products_table on product_id=id
+alias orders_net_total select order_lines_priced gather order_id sum(net_total):order_net_total
+alias orders_report_daily ordersubjects.date:date orders_net_total.order_net_total:order_net_total select ordersubjects left orders_net_total on order_id=order_id gather (date,0,10):day sum(order_net_total):grand_total
+alias orders_report_monthly ordersubjects.date:date orders_net_total.order_net_total:order_net_total select ordersubjects left orders_net_total on order_id=order_id gather (date,0,7):month sum(order_net_total):grand_total
+insert orders_table 20260916191026 ' '
+insert products_table 20260916191234 'Product 1' ' ' 100
+insert ordercontents_table 20260916191256 20260916191026 20260916191234 10 0 '2026-09-16'
+insert ordercontents_table 20260916191414 20260916191026 20260916191234 5.6 0 '2026-09-15'
+insert orders_table 20260916191443 ' '
+insert ordercontents_table 20260916191508 20260916191443 20260916191234 8 10 '2026-08-31'
+insert _invalid 20260916191533 20260916191443 'orders'
+insert suppliers_table 20260916193732 'Supplier 1' ' '
+insert ordersubjects_table 20260916193754 20260916191026 '2020-09-16' 20260916193732 ' '
+insert _invalid 20260916193807 20260916193732 'suppliers'
+insert suppliers_table 20260916193807 'Supplier 1' 'address 1'
+insert _invalid 20260916193818 20260916193754 'ordersubjects'
+insert ordersubjects_table 20260916193818 20260916191026 '2020-09-16' 20260916193807 ' '
+insert orders_table 20260917122324 ' '
+insert ordersubjects_table 20260917124023 20260917122324 '2026-09-17' 20260916193807 ' '
+insert _invalid 20260917124107 20260917124023 'ordersubjects'
+insert ordersubjects_table 20260917124107 20260917122324 '2026-09-17' 20260916193807 'ok'
+insert _invalid 20260917125932 20260917124107 'ordersubjects'
+insert ordersubjects_table 20260917125932 20260917122324 '2026-09-17' 20260916193807 'paid'
+insert orders_table 20260918062046 ' '
+insert ordersubjects_table 20260918062107 20260918062046 '2026-08-31' 20260916193807 ' '
+insert ordercontents_table 20260918062126 20260918062046 20260916191234 2 0 ' '
+insert orders_table 20260918062139 ' '
+insert ordersubjects_table 20260918062152 20260918062139 '2026-08-30' 20260916193807 ' '
+insert ordercontents_table 20260918062207 20260918062139 20260916191234 4 0 ' '
+insert _invalid 20260918062225 20260918062107 'ordersubjects'
+insert ordersubjects_table 20260918062225 20260918062046 '2026-08-31' 20260916193807 'edit'
+insert _invalid 20260919064931 20260918062126 'ordercontents'
+insert ordercontents_table 20260919064931 20260918062046 20260916191234 3 0 ' '
+insert _invalid 20260919065012 20260919064931 'ordercontents'
+insert ordercontents_table 20260919065012 20260918062046 20260916191234 3 25 'disc.'
